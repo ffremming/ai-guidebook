@@ -38,6 +38,7 @@ class PrismaPolicyRuleProvider implements PolicyRuleProvider {
 export interface EvaluateIntentResult {
   detectedCategory: string | null;
   complianceStatus: ComplianceStatus;
+  severityLevel: SeverityLevel | null;
   ruleReferences: string[];
   message: string;
 }

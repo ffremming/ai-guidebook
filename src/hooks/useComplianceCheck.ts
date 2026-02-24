@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from 'react';
 
 type CompliancePreview = {
   status: 'PENDING' | 'COMPLIANT' | 'WARNING' | 'NON_COMPLIANT';
+  severityLevel: 'ALLOWED' | 'MINOR' | 'MODERATE' | 'SERIOUS' | 'FORBIDDEN' | null;
+  isSerious: boolean;
   detectedCategory: string | null;
   ruleReferences: string[];
   message: string;

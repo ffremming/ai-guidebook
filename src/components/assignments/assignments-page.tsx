@@ -239,30 +239,30 @@ export function AssignmentsPage() {
     queryKey: ['assignment-usage-tree-assignment-page', expandedAssignmentId],
     queryFn: () => fetchAssignmentUsageTree(expandedAssignmentId as string),
     enabled: Boolean(expandedAssignmentId),
-    onSuccess: (data) => {
-      if (!expandedAssignmentId) {
-        return;
-      }
-      setExpandedTreeNodeIdsByAssignment((current) => {
-        if (current[expandedAssignmentId]) {
-          return current;
-        }
-        return {
-          ...current,
-          [expandedAssignmentId]: collectExpandedPathIdsForDisallowedLeaves(data.tree),
-        };
-      });
-    },
   });
 
   const assignments = useMemo(
     () => assignmentsQuery.data?.assignments ?? [],
     [assignmentsQuery.data?.assignments],
   );
-  const expandedTreeNodeIds = useMemo(
-    () => new Set(expandedAssignmentId ? expandedTreeNodeIdsByAssignment[expandedAssignmentId] ?? [] : []),
-    [expandedAssignmentId, expandedTreeNodeIdsByAssignment],
-  );
+  const expandedTreeNodeIds = useMemo(() => {
+    if (!expandedAssignmentId) {
+      return new Set<string>();
+    }
+
+    const persisted = expandedTreeNodeIdsByAssignment[expandedAssignmentId];
+    if (persisted) {
+      return new Set(persisted);
+    }
+
+    return new Set(
+      collectExpandedPathIdsForDisallowedLeaves(assignmentTreeQuery.data?.tree ?? []),
+    );
+  }, [
+    assignmentTreeQuery.data?.tree,
+    expandedAssignmentId,
+    expandedTreeNodeIdsByAssignment,
+  ]);
 
   const latestLogByAssignmentId = useMemo(() => {
     const map = new Map<string, StudentLog>();

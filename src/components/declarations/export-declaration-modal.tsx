@@ -1,32 +1,23 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
-import type { DeclarationData, DeclarationExportResponse } from '@/hooks/useDeclaration';
+import type { DeclarationData } from '@/hooks/useDeclaration';
 
 type ExportDeclarationModalProps = {
   declarationData: DeclarationData | null;
+  assignmentId: string;
   disabled?: boolean;
-  onConfirmExport: () => Promise<DeclarationExportResponse>;
 };
-
-function downloadJson(filename: string, data: unknown) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-}
 
 export function ExportDeclarationModal({
   declarationData,
+  assignmentId,
   disabled = false,
-  onConfirmExport,
 }: ExportDeclarationModalProps) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!declarationData) {
     return (
@@ -83,29 +74,24 @@ export function ExportDeclarationModal({
                 type="button"
                 onClick={() => setOpen(false)}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700"
-                disabled={isSubmitting}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={async () => {
-                  setIsSubmitting(true);
-                  try {
-                    const exported = await onConfirmExport();
-                    downloadJson(
-                      `declaration-${declarationData.declaration.assignmentId}.json`,
-                      exported,
-                    );
-                    setOpen(false);
-                  } finally {
-                    setIsSubmitting(false);
-                  }
+                onClick={() => {
+                  const returnTo = `/declarations/${assignmentId}`;
+                  router.push(
+                    `/reflections?assignmentId=${encodeURIComponent(
+                      assignmentId,
+                    )}&triggerType=STANDARD_EXPORT&action=export&returnTo=${encodeURIComponent(
+                      returnTo,
+                    )}`,
+                  );
                 }}
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                disabled={isSubmitting}
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
               >
-                {isSubmitting ? 'Exporting...' : 'Confirm Export'}
+                Continue to Reflection
               </button>
             </div>
           </div>

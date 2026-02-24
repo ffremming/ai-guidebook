@@ -88,6 +88,20 @@ enum DeclarationStatus {
   @@map("declaration_status")
 }
 
+enum ReflectionTriggerType {
+  STANDARD_EXPORT
+  COMPLIANCE_SERIOUS
+
+  @@map("reflection_trigger_type")
+}
+
+enum ReflectionStatus {
+  REQUIRED
+  COMPLETED
+
+  @@map("reflection_status")
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // USERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -109,6 +123,7 @@ model User {
   publishedPolicyVersions   PolicyVersion[]               @relation("PolicyPublisher")
   aiLogs                    AiLog[]
   declarations              Declaration[]
+  reflectionJournalEntries  ReflectionJournalEntry[]
   resolutions               Resolution[]
   policyChangeNotifications PolicyChangeNotification[]
   auditLogs                 AuditLog[]
@@ -248,6 +263,7 @@ model Assignment {
   // Back-relations
   aiLogs                    AiLog[]
   declarations              Declaration[]
+  reflectionJournalEntries  ReflectionJournalEntry[]
   policyChangeNotifications PolicyChangeNotification[]
 
   @@map("assignments")
@@ -384,6 +400,27 @@ model Declaration {
 
   @@unique([userId, assignmentId])
   @@map("declarations")
+}
+
+model ReflectionJournalEntry {
+  id                String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String                @db.Uuid @map("user_id")
+  assignmentId      String                @db.Uuid @map("assignment_id")
+  triggerType       ReflectionTriggerType @map("trigger_type")
+  status            ReflectionStatus      @default(REQUIRED)
+  promptSetVersion  String                @default("v1") @db.VarChar(20) @map("prompt_set_version")
+  responsesJson     Json                  @default(dbgenerated("'{}'::jsonb")) @db.JsonB @map("responses_json")
+  justificationText String?               @map("justification_text")
+  requiredForUnlock Boolean               @default(false) @map("required_for_unlock")
+  completedAt       DateTime?             @db.Timestamptz(6) @map("completed_at")
+  createdAt         DateTime              @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt         DateTime              @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignment Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, assignmentId, triggerType])
+  @@map("reflection_journal_entries")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

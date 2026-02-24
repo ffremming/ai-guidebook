@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'next/navigation';
 
@@ -64,6 +64,27 @@ type AssignmentUsageTreeNode = {
 
 type AssignmentUsageTreeResponse = {
   tree: AssignmentUsageTreeNode[];
+};
+
+type PendingReflectionResponse = {
+  requiresCompletion: boolean;
+  entries: Array<{
+    id: string;
+    assignmentId: string;
+    triggerType: 'STANDARD_EXPORT' | 'COMPLIANCE_SERIOUS';
+    status: 'REQUIRED' | 'COMPLETED';
+    requiredForUnlock: boolean;
+    createdAt: string;
+  }>;
+  blockingEntry: {
+    id: string;
+    assignmentId: string;
+    triggerType: 'COMPLIANCE_SERIOUS';
+    status: 'REQUIRED' | 'COMPLETED';
+    requiredForUnlock: boolean;
+    createdAt: string;
+  } | null;
+  reflectionFeatureUnavailable?: boolean;
 };
 
 export type ManualLogFormValues = CreateLogInput;
@@ -249,6 +270,27 @@ async function fetchAssignmentUsageTree(assignmentId: string): Promise<Assignmen
   return (await response.json()) as AssignmentUsageTreeResponse;
 }
 
+async function fetchPendingSeriousReflection(
+  assignmentId: string,
+): Promise<PendingReflectionResponse> {
+  const response = await fetch(
+    `/api/reflections/pending?assignmentId=${encodeURIComponent(
+      assignmentId,
+    )}&triggerType=COMPLIANCE_SERIOUS`,
+    {
+      method: 'GET',
+      cache: 'no-store',
+    },
+  );
+
+  if (!response.ok) {
+    const payload = (await response.json()) as { error?: string };
+    throw new Error(payload.error ?? 'Failed to load reflection status');
+  }
+
+  return (await response.json()) as PendingReflectionResponse;
+}
+
 function SectionCard({
   step,
   title,
@@ -295,6 +337,8 @@ export function ManualLogForm({
   const [complianceJustificationTouched, setComplianceJustificationTouched] = useState(false);
   const [confirmedOwnership, setConfirmedOwnership] = useState(false);
   const [confirmedEvidence, setConfirmedEvidence] = useState(false);
+  const [isDesktopViewport, setIsDesktopViewport] = useState(false);
+  const triggeredSeriousReflectionAssignmentId = useRef<string | null>(null);
 
   const assignmentsQuery = useQuery({
     queryKey: ['assignments'],
@@ -386,6 +430,12 @@ export function ManualLogForm({
     usageReason,
     selectedAssignmentId ? selectedAssignmentId : null,
   );
+  const seriousReflectionQuery = useQuery({
+    queryKey: ['pending-serious-reflection', selectedAssignmentId],
+    queryFn: () => fetchPendingSeriousReflection(selectedAssignmentId as string),
+    enabled: Boolean(selectedAssignmentId && isDesktopViewport),
+    refetchOnWindowFocus: false,
+  });
   const assignmentUsageTreeQuery = useQuery({
     queryKey: ['assignment-usage-tree-for-form', selectedAssignmentId],
     queryFn: () => fetchAssignmentUsageTree(selectedAssignmentId as string),
@@ -415,6 +465,11 @@ export function ManualLogForm({
 
     return selectedNodeIds.filter((nodeId) => disallowedNodeIds.has(nodeId));
   }, [usageSubsectionsValue, assignmentUsageTreeQuery.data?.tree]);
+  const isSeriousIntentFlag = complianceCheck.result?.isSerious ?? false;
+  const isSessionLockedForReflection =
+    isDesktopViewport &&
+    !seriousReflectionQuery.data?.reflectionFeatureUnavailable &&
+    Boolean(seriousReflectionQuery.data?.blockingEntry);
   const usageNodeStatusById = useMemo(() => {
     const result: Record<string, 'ALLOWED' | 'DISALLOWED' | 'MIXED'> = {};
     const stack = [...(assignmentUsageTreeQuery.data?.tree ?? [])];
@@ -543,6 +598,81 @@ export function ManualLogForm({
   });
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const mediaQuery = window.matchMedia('(min-width: 1024px)');
+    const apply = () => setIsDesktopViewport(mediaQuery.matches);
+    apply();
+
+    mediaQuery.addEventListener('change', apply);
+    return () => {
+      mediaQuery.removeEventListener('change', apply);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedAssignmentId) {
+      triggeredSeriousReflectionAssignmentId.current = null;
+      return;
+    }
+
+    if (
+      !isDesktopViewport ||
+      !isSeriousIntentFlag ||
+      triggeredSeriousReflectionAssignmentId.current === selectedAssignmentId
+    ) {
+      return;
+    }
+
+    const run = async () => {
+      try {
+        const triggerResponse = await fetch('/api/reflections/trigger', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({
+            assignmentId: selectedAssignmentId,
+            triggerType: 'COMPLIANCE_SERIOUS',
+          }),
+        });
+
+        if (!triggerResponse.ok) {
+          return;
+        }
+
+        triggeredSeriousReflectionAssignmentId.current = selectedAssignmentId;
+        const pending = await seriousReflectionQuery.refetch();
+        if (pending.data?.reflectionFeatureUnavailable) {
+          return;
+        }
+
+        const returnTo = editingLogId
+          ? `/log?logId=${encodeURIComponent(editingLogId)}`
+          : `/log?assignmentId=${encodeURIComponent(selectedAssignmentId)}`;
+        router.push(
+          `/reflections?assignmentId=${encodeURIComponent(
+            selectedAssignmentId,
+          )}&triggerType=COMPLIANCE_SERIOUS&returnTo=${encodeURIComponent(returnTo)}`,
+        );
+      } catch {
+        // Reflection is best-effort here; submit validation still enforces required fields.
+      }
+    };
+
+    void run();
+  }, [
+    editingLogId,
+    isDesktopViewport,
+    isSeriousIntentFlag,
+    router,
+    selectedAssignmentId,
+    seriousReflectionQuery,
+  ]);
+
+  useEffect(() => {
     if (!editingLogQuery.data) {
       return;
     }
@@ -594,6 +724,18 @@ export function ManualLogForm({
 
     if (!isContextComplete) {
       setSubmitError('Complete the context section before submitting the log.');
+      return;
+    }
+    if (isSessionLockedForReflection && selectedAssignmentId) {
+      const returnTo = editingLogId
+        ? `/log?logId=${encodeURIComponent(editingLogId)}`
+        : `/log?assignmentId=${encodeURIComponent(selectedAssignmentId)}`;
+      setSubmitError('Complete the serious-flag reflection before continuing this AI session.');
+      router.push(
+        `/reflections?assignmentId=${encodeURIComponent(
+          selectedAssignmentId,
+        )}&triggerType=COMPLIANCE_SERIOUS&returnTo=${encodeURIComponent(returnTo)}`,
+      );
       return;
     }
 
@@ -877,7 +1019,43 @@ export function ManualLogForm({
               </div>
             </SectionCard>
 
-            {isContextComplete ? (
+            {isContextComplete && isSessionLockedForReflection ? (
+              <SectionCard
+                step="2"
+                title="Reflection Required"
+                description="A serious policy flag was detected. Complete the justification entry to unlock this session."
+              >
+                <div className="rounded-xl border border-red-300 bg-red-50 p-4">
+                  <p className="text-sm font-semibold text-red-900">
+                    Session locked on desktop until reflection is saved.
+                  </p>
+                  <p className="mt-1 text-sm text-red-800">
+                    Open the reflection journal and submit your justification.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selectedAssignmentId) {
+                        return;
+                      }
+                      const returnTo = editingLogId
+                        ? `/log?logId=${encodeURIComponent(editingLogId)}`
+                        : `/log?assignmentId=${encodeURIComponent(selectedAssignmentId)}`;
+                      router.push(
+                        `/reflections?assignmentId=${encodeURIComponent(
+                          selectedAssignmentId,
+                        )}&triggerType=COMPLIANCE_SERIOUS&returnTo=${encodeURIComponent(returnTo)}`,
+                      );
+                    }}
+                    className="mt-3 rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    Open Justification Entry
+                  </button>
+                </div>
+              </SectionCard>
+            ) : null}
+
+            {isContextComplete && !isSessionLockedForReflection ? (
               <SectionCard
                 step="2"
                 title="Usage Classification"
@@ -1030,7 +1208,7 @@ export function ManualLogForm({
               </SectionCard>
             ) : null}
 
-            {isContextComplete && !isEditMode ? (
+            {isContextComplete && !isEditMode && !isSessionLockedForReflection ? (
               <SectionCard
                 step="3"
                 title="Final Review"
@@ -1149,7 +1327,7 @@ export function ManualLogForm({
               </div>
             </section>
 
-            {isContextComplete ? (
+            {isContextComplete && !isSessionLockedForReflection ? (
               <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <CompliancePreviewPanel
                   isLoading={complianceCheck.isLoading}
@@ -1158,6 +1336,13 @@ export function ManualLogForm({
                   detectedCategory={complianceCheck.result?.detectedCategory ?? null}
                   ruleReferences={complianceCheck.result?.ruleReferences ?? []}
                 />
+              </section>
+            ) : isSessionLockedForReflection ? (
+              <section className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Compliance Preview</p>
+                <p className="mt-2 text-sm text-red-800">
+                  A serious flag requires reflection before this session can continue.
+                </p>
               </section>
             ) : (
               <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1171,10 +1356,12 @@ export function ManualLogForm({
             <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
               <button
                 type="submit"
-                disabled={createLogMutation.isPending || updateLogMutation.isPending}
+                disabled={createLogMutation.isPending || updateLogMutation.isPending || isSessionLockedForReflection}
                 className="w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
-                {createLogMutation.isPending || updateLogMutation.isPending
+                {isSessionLockedForReflection
+                  ? 'Complete reflection to unlock'
+                  : createLogMutation.isPending || updateLogMutation.isPending
                   ? 'Submitting...'
                   : isEditMode
                     ? 'Save log'

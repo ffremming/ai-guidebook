@@ -80,6 +80,8 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         status: result.complianceStatus,
+        severityLevel: result.severityLevel,
+        isSerious: result.severityLevel === 'SERIOUS',
         detectedCategory: result.detectedCategory,
         ruleReferences: result.ruleReferences,
         message: result.message,

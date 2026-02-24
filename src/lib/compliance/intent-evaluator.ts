@@ -5,6 +5,7 @@ import type { PolicyRuleRecord } from './policy-evaluator';
 export interface IntentEvaluationResult {
   detectedCategory: string | null;
   complianceStatus: ComplianceStatus;
+  severityLevel: SeverityLevel | null;
   ruleReferences: string[];
   message: string;
 }
@@ -60,6 +61,7 @@ export function evaluateIntentFromRules(
     return {
       detectedCategory: null,
       complianceStatus: ComplianceStatus.WARNING,
+      severityLevel: null,
       ruleReferences: [],
       message: 'Could not determine usage category — please be more specific',
     };
@@ -68,6 +70,7 @@ export function evaluateIntentFromRules(
   return {
     detectedCategory: best.rule.usageCategory,
     complianceStatus: severityToComplianceStatus(best.rule.severityLevel),
+    severityLevel: best.rule.severityLevel,
     ruleReferences: [best.rule.ruleReference],
     message: `Detected category: ${best.rule.usageCategory}`,
   };
