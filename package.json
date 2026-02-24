@@ -6,21 +6,58 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:seed": "prisma db seed",
+    "test:integration": "tsx --test tests/integration/assignments.integration.test.ts",
+    "test:integration:policies": "tsx --test tests/integration/policies.integration.test.ts",
+    "test:integration:logs": "tsx --test tests/integration/logs.integration.test.ts",
+    "test:integration:intent-check": "tsx --test tests/integration/intent-check.integration.test.ts",
+    "test:integration:classify": "tsx --test tests/integration/classify.integration.test.ts",
+    "test:integration:declarations": "tsx --test tests/integration/declarations.integration.test.ts",
+    "test:integration:resolutions": "tsx --test tests/integration/resolutions.integration.test.ts",
+    "test:integration:dashboard": "tsx --test tests/integration/dashboard.integration.test.ts",
+    "test:integration:notifications": "tsx --test tests/integration/notifications.integration.test.ts",
+    "test:integration:staff-view": "tsx --test tests/integration/staff-view.integration.test.ts",
+    "test:unit:compliance": "tsx --test tests/unit/compliance-engine.unit.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.2.2",
+    "@prisma/client": "^5.22.0",
+    "@radix-ui/react-accordion": "^1.2.12",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-label": "^2.1.8",
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@radix-ui/react-toast": "^1.2.15",
+    "@tanstack/react-query": "^5.90.21",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
     "next": "16.1.6",
+    "next-auth": "^5.0.0-beta.30",
+    "prisma": "^5.22.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "react-hook-form": "^7.71.1",
+    "tailwind-merge": "^3.5.0",
+    "zod": "^4.3.6",
+    "zustand": "^5.0.11"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@playwright/test": "^1.56.1",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
+    "tsx": "^4.20.6",
     "typescript": "^5"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
   }
 }

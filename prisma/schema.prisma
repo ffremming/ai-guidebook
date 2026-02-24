@@ -1,0 +1,469 @@
+// AI Guidebook — Canonical Data Model
+// Single source of truth. All application code derives types from here via `prisma generate`.
+// See architectural document section 6 for the SQL-level spec.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUMS  (9 total — must match the SQL CREATE TYPE definitions exactly)
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  STUDENT
+  INSTRUCTOR
+  ADMIN
+
+  @@map("user_role")
+}
+
+enum EnrollmentRole {
+  STUDENT
+  INSTRUCTOR
+
+  @@map("enrollment_role")
+}
+
+enum AssignmentStatus {
+  ACTIVE
+  CLOSED
+
+  @@map("assignment_status")
+}
+
+enum PolicyStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+
+  @@map("policy_status")
+}
+
+/// Severity levels for policy rule violations.
+/// ALLOWED = permitted use; FORBIDDEN = absolute prohibition.
+enum SeverityLevel {
+  ALLOWED
+  MINOR
+  MODERATE
+  SERIOUS
+  FORBIDDEN
+
+  @@map("severity_level")
+}
+
+enum ComplianceStatus {
+  PENDING
+  COMPLIANT
+  WARNING
+  NON_COMPLIANT
+
+  @@map("compliance_status")
+}
+
+enum ResolutionStatus {
+  NONE
+  UNRESOLVED
+  STUDENT_RESPONDED
+
+  @@map("resolution_status")
+}
+
+enum CheckType {
+  PRE_SESSION
+  POST_SESSION
+
+  @@map("check_type")
+}
+
+enum DeclarationStatus {
+  DRAFT
+  EXPORTED
+
+  @@map("declaration_status")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// USERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email     String   @unique @db.VarChar(320)
+  name      String   @db.VarChar(255)
+  role      UserRole
+  /// Provider subject identifier used to map external auth identity to a user.
+  /// Mapped to the legacy column name for backward DB compatibility.
+  authSubject String? @unique @db.VarChar(255) @map("feide_sub")
+  createdAt DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  // Back-relations
+  enrollments               Enrollment[]
+  /// Policy versions this user published (ADMIN role).
+  publishedPolicyVersions   PolicyVersion[]               @relation("PolicyPublisher")
+  aiLogs                    AiLog[]
+  declarations              Declaration[]
+  resolutions               Resolution[]
+  policyChangeNotifications PolicyChangeNotification[]
+  auditLogs                 AuditLog[]
+
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COURSES
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Course {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseCode  String   @unique @db.VarChar(20) @map("course_code")
+  name        String   @db.VarChar(255)
+  institution String   @default("NTNU") @db.VarChar(255)
+  createdAt   DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  // Back-relations
+  enrollments Enrollment[]
+  assignments Assignment[]
+  usageRules  CourseUsageRule[]
+
+  @@map("courses")
+}
+
+model CourseUsageRule {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId  String   @db.Uuid @map("course_id")
+  nodeId    String   @db.VarChar(150) @map("node_id")
+  isAllowed Boolean  @default(true) @map("is_allowed")
+  createdAt DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, nodeId])
+  @@map("course_usage_rules")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENROLLMENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Enrollment {
+  id         String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String         @db.Uuid @map("user_id")
+  courseId   String         @db.Uuid @map("course_id")
+  /// Role within this specific course — independent of the user's global role.
+  role       EnrollmentRole
+  enrolledAt DateTime       @default(now()) @db.Timestamptz(6) @map("enrolled_at")
+
+  // Relations
+  user   User   @relation(fields: [userId], references: [id])
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+  @@map("enrollments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLICY VERSIONS  [FR-9]
+// Defined before Assignment because Assignment has a nullable FK to this table.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PolicyVersion {
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  versionNumber String       @unique @db.VarChar(100) @map("version_number")
+  description   String?
+  status        PolicyStatus @default(DRAFT)
+  publishedById String?      @db.Uuid @map("published_by")
+  publishedAt   DateTime?    @db.Timestamptz(6) @map("published_at")
+  archivedAt    DateTime?    @db.Timestamptz(6) @map("archived_at")
+  createdAt     DateTime     @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  // Relations
+  publishedBy User? @relation("PolicyPublisher", fields: [publishedById], references: [id])
+
+  // Back-relations
+  rules            PolicyRule[]
+  assignments      Assignment[]
+  aiLogs           AiLog[]
+  complianceChecks ComplianceCheck[]
+  declarations     Declaration[]
+  /// Notifications where this version was the OLD (superseded) version.
+  oldVersionNotifications PolicyChangeNotification[] @relation("OldPolicyVersion")
+  /// Notifications where this version was the NEW (replacement) version.
+  newVersionNotifications PolicyChangeNotification[] @relation("NewPolicyVersion")
+
+  @@map("policy_versions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLICY RULES  [FR-9]
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PolicyRule {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  policyVersionId String        @db.Uuid @map("policy_version_id")
+  usageCategory   String        @db.VarChar(100) @map("usage_category")
+  severityLevel   SeverityLevel @map("severity_level")
+  description     String?
+  ruleReference   String        @db.VarChar(100) @map("rule_reference")
+  /// Keyword list used by the compliance engine classifier (FR-4).
+  keywords        String[]      @default([])
+
+  // Relations
+  policyVersion PolicyVersion @relation(fields: [policyVersionId], references: [id])
+
+  @@unique([policyVersionId, usageCategory])
+  @@map("policy_rules")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ASSIGNMENTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Assignment {
+  id     String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  courseId              String           @db.Uuid @map("course_id")
+  title                 String           @db.VarChar(500)
+  /// Student-facing unique code used to join this assignment without searching.
+  assignmentCode        String           @unique @db.VarChar(32) @map("assignment_code")
+  description           String?
+  dueDate               DateTime?        @db.Timestamptz(6) @map("due_date")
+  status                AssignmentStatus @default(ACTIVE)
+  /// Pinned on first log submission. Ensures historical compliance re-runs use
+  /// the policy version that was active at submission time (FR-9).
+  pinnedPolicyVersionId String?          @db.Uuid @map("pinned_policy_version_id")
+  createdAt             DateTime         @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt             DateTime         @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  // Relations
+  course              Course         @relation(fields: [courseId], references: [id])
+  pinnedPolicyVersion PolicyVersion? @relation(fields: [pinnedPolicyVersionId], references: [id])
+
+  // Back-relations
+  aiLogs                    AiLog[]
+  declarations              Declaration[]
+  policyChangeNotifications PolicyChangeNotification[]
+
+  @@map("assignments")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AI LOGS  [FR-2]
+// Sensitive fields encrypted at the application layer (AES-256-GCM) — NFR-2.
+// Encryption/decryption performed in src/lib/encryption/field-encryptor.ts.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AiLog {
+  id                     String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String           @db.Uuid @map("user_id")
+  assignmentId           String           @db.Uuid @map("assignment_id")
+  /// [ENCRYPTED] — AES-256-GCM applied at application layer before every write.
+  usageReason            String           @map("usage_reason")
+  /// Student-selected top-level manual usage section (tree taxonomy v1).
+  manualUsageSection     String?          @db.VarChar(100) @map("manual_usage_section")
+  /// Student-selected leaf usage subsection (tree taxonomy v1).
+  manualUsageSubsection  String?          @db.VarChar(150) @map("manual_usage_subsection")
+  /// Student-selected leaf usage subsections (multiple selection allowed).
+  manualUsageSubsections String[]         @default([]) @map("manual_usage_subsections")
+  /// Version tag for the manual usage taxonomy used during selection.
+  manualUsageTaxonomyVersion String?      @db.VarChar(20) @map("manual_usage_taxonomy_version")
+  /// [ENCRYPTED] — AES-256-GCM applied at application layer before every write.
+  sessionDescription     String?          @map("session_description")
+  aiTool                 String           @db.VarChar(100) @map("ai_tool")
+  loggedAt               DateTime         @default(now()) @db.Timestamptz(6) @map("logged_at")
+  complianceStatus       ComplianceStatus @default(PENDING) @map("compliance_status")
+  /// Populated after post-session classification (FR-4).
+  flagSeverity           SeverityLevel?   @map("flag_severity")
+  /// Category detected during pre-session intent check.
+  intentCategory         String?          @db.VarChar(100) @map("intent_category")
+  /// Category detected during post-session classification.
+  actualUsageCategory    String?          @db.VarChar(100) @map("actual_usage_category")
+  /// True when intent category differs from actual and actual has higher severity.
+  conflictFlag           Boolean          @default(false) @map("conflict_flag")
+  /// True when actual category has SERIOUS or FORBIDDEN severity.
+  directViolationFlag    Boolean          @default(false) @map("direct_violation_flag")
+  /// Records the policy version active at log time for historical re-runs (FR-9).
+  appliedPolicyVersionId String           @db.Uuid @map("applied_policy_version_id")
+  resolutionStatus       ResolutionStatus @default(NONE) @map("resolution_status")
+  createdAt              DateTime         @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt              DateTime         @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  // Relations
+  user                 User          @relation(fields: [userId], references: [id])
+  assignment           Assignment    @relation(fields: [assignmentId], references: [id])
+  appliedPolicyVersion PolicyVersion @relation(fields: [appliedPolicyVersionId], references: [id])
+
+  // Back-relations
+  conversationLinks ConversationLink[]
+  complianceChecks  ComplianceCheck[]
+  /// One resolution per log (enforced by @unique on Resolution.aiLogId).
+  resolution        Resolution?
+
+  @@map("ai_logs")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CONVERSATION LINKS  [FR-2]
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ConversationLink {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  aiLogId   String   @db.Uuid @map("ai_log_id")
+  /// Node id in the taxonomy tree that this evidence item is attached to.
+  usageNodeId String? @db.VarChar(150) @map("usage_node_id")
+  /// Type of evidence payload (URL or COMMENT).
+  evidenceType String? @db.VarChar(20) @map("evidence_type")
+  /// [ENCRYPTED] — AES-256-GCM applied at application layer before every write.
+  url       String?
+  /// [ENCRYPTED] — Free-text note connected to a taxonomy node.
+  comment   String?
+  /// Optional student-provided label for the link.
+  label     String?  @db.VarChar(255)
+  createdAt DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  // Relations — CASCADE so links are deleted when the parent log is deleted.
+  aiLog AiLog @relation(fields: [aiLogId], references: [id], onDelete: Cascade)
+
+  @@map("conversation_links")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPLIANCE CHECKS  [FR-4]
+// ─────────────────────────────────────────────────────────────────────────────
+
+model ComplianceCheck {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Nullable: pre-submission intent checks have no associated log yet.
+  aiLogId          String?          @db.Uuid @map("ai_log_id")
+  checkType        CheckType        @map("check_type")
+  policyVersionId  String           @db.Uuid @map("policy_version_id")
+  /// [ENCRYPTED] — AES-256-GCM applied at application layer before every write.
+  inputText        String           @map("input_text")
+  detectedCategory String           @db.VarChar(100) @map("detected_category")
+  complianceResult ComplianceStatus @map("compliance_result")
+  ruleReferences   String[]         @default([]) @map("rule_references")
+  flagsJson        Json             @default(dbgenerated("'{}'::jsonb")) @db.JsonB @map("flags_json")
+  checkedAt        DateTime         @default(now()) @db.Timestamptz(6) @map("checked_at")
+
+  // Relations
+  aiLog         AiLog?        @relation(fields: [aiLogId], references: [id])
+  policyVersion PolicyVersion @relation(fields: [policyVersionId], references: [id])
+
+  @@map("compliance_checks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DECLARATIONS  [FR-3]
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Declaration {
+  id                     String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                 String            @db.Uuid @map("user_id")
+  assignmentId           String            @db.Uuid @map("assignment_id")
+  /// Server-generated summary. Written once on first GET; never overwritten.
+  systemGeneratedSummary String            @map("system_generated_summary")
+  /// Student-authored remarks. Editable until export.
+  studentRemarks         String?           @map("student_remarks")
+  /// Policy version active when the declaration was first generated (FR-9).
+  policyVersionId        String            @db.Uuid @map("policy_version_id")
+  status                 DeclarationStatus @default(DRAFT)
+  exportedAt             DateTime?         @db.Timestamptz(6) @map("exported_at")
+  createdAt              DateTime          @default(now()) @db.Timestamptz(6) @map("created_at")
+  updatedAt              DateTime          @updatedAt @db.Timestamptz(6) @map("updated_at")
+
+  // Relations
+  user          User          @relation(fields: [userId], references: [id])
+  assignment    Assignment    @relation(fields: [assignmentId], references: [id])
+  policyVersion PolicyVersion @relation(fields: [policyVersionId], references: [id])
+
+  @@unique([userId, assignmentId])
+  @@map("declarations")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RESOLUTIONS  [FR-6]
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Resolution {
+  id                     String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// @unique enforces the business rule: one resolution per log.
+  aiLogId                String   @unique @db.Uuid @map("ai_log_id")
+  userId                 String   @db.Uuid @map("user_id")
+  narrativeExplanation   String   @map("narrative_explanation")
+  /// Student's alternative category (only for conflict_flag disputes).
+  disputedCategory       String?  @db.VarChar(100) @map("disputed_category")
+  disputeEvidence        String?  @map("dispute_evidence")
+  /// Snapshot of ai_logs.actual_usage_category at submission time.
+  /// The original system classification is NEVER deleted or modified (FR-6 AC).
+  originalSystemCategory String   @db.VarChar(100) @map("original_system_category")
+  submittedAt            DateTime @default(now()) @db.Timestamptz(6) @map("submitted_at")
+  createdAt              DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  // Relations
+  aiLog AiLog @relation(fields: [aiLogId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@map("resolutions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// POLICY CHANGE NOTIFICATIONS  [FR-9]
+// ─────────────────────────────────────────────────────────────────────────────
+
+model PolicyChangeNotification {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String   @db.Uuid @map("user_id")
+  assignmentId       String   @db.Uuid @map("assignment_id")
+  oldPolicyVersionId String   @db.Uuid @map("old_policy_version_id")
+  newPolicyVersionId String   @db.Uuid @map("new_policy_version_id")
+  /// Human-readable diff of the changed rules between the two policy versions.
+  changeSummary      String   @map("change_summary")
+  isRead             Boolean  @default(false) @map("is_read")
+  createdAt          DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  // Relations — explicit names required because PolicyChangeNotification has
+  // two FK fields pointing to the same PolicyVersion model.
+  user             User          @relation(fields: [userId], references: [id])
+  assignment       Assignment    @relation(fields: [assignmentId], references: [id])
+  oldPolicyVersion PolicyVersion @relation("OldPolicyVersion", fields: [oldPolicyVersionId], references: [id])
+  newPolicyVersion PolicyVersion @relation("NewPolicyVersion", fields: [newPolicyVersionId], references: [id])
+
+  @@map("policy_change_notifications")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUDIT LOGS  [NFR-2]
+// APPEND-ONLY: no UPDATE or DELETE is ever issued against this table.
+// A PostgreSQL trigger in the initial migration enforces this at the database
+// engine level — see prisma/migrations/*/migration.sql.
+//
+// action_type values:
+//   USER_LOGIN | LOG_CREATED | COMPLIANCE_CLASSIFIED | DECLARATION_EXPORTED
+//   RESOLUTION_SUBMITTED | STAFF_VIEW | POLICY_VERSION_CREATED
+//   POLICY_VERSION_PUBLISHED
+// ─────────────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  actorId      String   @db.Uuid @map("actor_id")
+  actionType   String   @db.VarChar(100) @map("action_type")
+  resourceType String   @db.VarChar(50) @map("resource_type")
+  /// UUID of the affected resource. No FK constraint — references multiple tables.
+  resourceId   String   @db.Uuid @map("resource_id")
+  /// Contextual metadata: fields_accessed (STAFF_VIEW), ip_address, user_agent, delta.
+  metadataJson Json     @default(dbgenerated("'{}'::jsonb")) @db.JsonB @map("metadata_json")
+  /// Supports both IPv4 (max 15 chars) and IPv6 with brackets (max 45 chars).
+  ipAddress    String?  @db.VarChar(45) @map("ip_address")
+  createdAt    DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  // Relations
+  actor User @relation(fields: [actorId], references: [id])
+
+  @@map("audit_logs")
+}
