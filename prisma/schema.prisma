@@ -124,6 +124,7 @@ model User {
   aiLogs                    AiLog[]
   declarations              Declaration[]
   reflectionJournalEntries  ReflectionJournalEntry[]
+  reflectionNotes           ReflectionNote[]
   resolutions               Resolution[]
   policyChangeNotifications PolicyChangeNotification[]
   auditLogs                 AuditLog[]
@@ -421,6 +422,17 @@ model ReflectionJournalEntry {
 
   @@unique([userId, assignmentId, triggerType])
   @@map("reflection_journal_entries")
+}
+
+model ReflectionNote {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @db.Uuid @map("user_id")
+  content   String
+  createdAt DateTime @default(now()) @db.Timestamptz(6) @map("created_at")
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reflection_notes")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

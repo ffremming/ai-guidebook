@@ -1,29 +1,22 @@
 # AI Guidebook
 
-AI Guidebook is a Next.js app for student AI usage logging, compliance checks, and declaration export.
+AI Guidebook is a Next.js app for student AI usage logging, compliance checks, declarations, and reflections.
 
-This guide is written for first-time setup on a clean machine.
-
-## Stack
-
-- Next.js 16
-- React 19
-- Prisma ORM
-- PostgreSQL 16
-- NextAuth (credentials provider)
+This setup is for first-time users.
 
 ## Prerequisites
 
 - Node.js 20+
 - npm 10+
-- Docker (recommended for PostgreSQL)
+- Docker
 
-Check versions:
+Quick check:
 
 ```bash
 node -v
 npm -v
 docker -v
+docker info >/dev/null && echo "Docker is running"
 ```
 
 ## 1. Install Dependencies
@@ -34,11 +27,7 @@ npm install
 
 ## 2. Start PostgreSQL
 
-You have two options.
-
-### Option A: Use Docker (recommended)
-
-Start a dedicated PostgreSQL container:
+### Option A (recommended): Docker PostgreSQL
 
 ```bash
 docker run -d \
@@ -50,19 +39,13 @@ docker run -d \
   postgres:16
 ```
 
-If container already exists:
+### Option B: Existing PostgreSQL
 
-```bash
-docker start guidebook-postgres
-```
-
-### Option B: Use an existing local PostgreSQL instance
-
-Use your own credentials/port and set `DATABASE_URL` accordingly.
+Use your own DB and set `DATABASE_URL` in `.env`.
 
 ## 3. Configure Environment Variables
 
-Create `ai-guidebook/.env` (or edit existing) with at least:
+Create `ai-guidebook/.env` with:
 
 ```env
 DATABASE_URL="postgresql://guidebook_user:guidebook_dev@localhost:5433/guidebook_db?schema=public"
@@ -73,34 +56,36 @@ INTERNAL_CLASSIFY_TOKEN="replace-with-random-secret"
 NEXTAUTH_URL="http://localhost:3000"
 ```
 
-Generate secure values:
+Generate secrets:
 
 ```bash
-openssl rand -base64 32   # for NEXTAUTH_SECRET / AUTH_SECRET / INTERNAL_CLASSIFY_TOKEN
-openssl rand -hex 32      # for ENCRYPTION_KEY
+openssl rand -base64 32
+openssl rand -hex 32
 ```
 
-## 4. Apply Database Migrations
+If `openssl` is unavailable, generate values another secure way and paste them into `.env`.
+
+## 4. Run Migrations
 
 ```bash
 npx prisma migrate deploy
 ```
 
-For development schema workflows, you can also use:
+Verify migration state:
 
 ```bash
-npx prisma migrate dev
+npx prisma migrate status
 ```
 
-## 5. Seed Initial Data (recommended)
+## 5. Seed Data (required for first run)
 
 ```bash
 npm run db:seed
 ```
 
-This seeds users, courses, assignments, policies, and usage rules.
+This creates baseline users, courses, assignments, policy versions, and rules.
 
-## 6. Start the App
+## 6. Start App
 
 ```bash
 npm run dev
@@ -108,20 +93,26 @@ npm run dev
 
 Open:
 
-- App: `http://localhost:3000`
-- Login: `http://localhost:3000/login`
+- `http://localhost:3000/login`
 
-## 7. First Login
+## 7. Login
 
-Use the credentials login form (name + email).
-
-Suggested seeded emails:
+Use the credentials form (name + email). Seeded emails you can use:
 
 - `student@ntnu.no`
 - `instructor@ntnu.no`
 - `admin@ntnu.no`
 
-The auth callback upserts user records by `authSubject` and email.
+## 8. Smoke Test (2 minutes)
+
+After login, verify these pages load without 500 errors:
+
+1. `/dashboard`
+2. `/assignments`
+3. `/log`
+4. `/reflections`
+
+Then create one log and confirm it appears in dashboard/my logs.
 
 ## Useful Commands
 
@@ -132,69 +123,46 @@ npm run test:integration
 npm run test:e2e
 ```
 
-## Common Issues
+## Common Problems
 
-### `500` on `/api/assignments`
+### 500 on `/api/assignments`
 
-Most common causes:
+Usually one of these:
 
-1. PostgreSQL container is not running
-2. Migrations were not applied
-3. Session is stale after switching database
+1. DB is down
+2. Migrations not applied
+3. Fresh DB but stale login session
 
 Fix:
 
 ```bash
 docker ps
-# if DB is stopped:
-docker start guidebook-postgres
-
 npx prisma migrate deploy
+npx prisma migrate status
 ```
 
 Then sign out and sign in again.
 
-### `500` on reflection endpoints (`/api/reflections/...`)
+### Reflection endpoints failing
 
-Cause: reflection migration not applied.
-
-Fix:
+Run migrations and verify status:
 
 ```bash
 npx prisma migrate deploy
+npx prisma migrate status
 ```
 
-### `PrismaClientInitializationError` / cannot connect to DB
+### `AUTH_REQUIRED` after switching database
 
-- Verify `DATABASE_URL` is correct
-- Verify PostgreSQL is running on the host/port in `DATABASE_URL`
-
-### `AUTH_REQUIRED` responses after database switch
-
-Your JWT may point to a user not present in the new DB.
+Your JWT references a user that does not exist in the new DB.
 
 Fix: sign out and sign in again.
 
-## Database Isolation Notes
+## Notes
 
-You can safely run this project in the same PostgreSQL server as other projects by using a different database name/user in `DATABASE_URL`.
+- This project can safely share one Postgres server with other projects if you use a separate database in `DATABASE_URL`.
+- If you change `.env`, restart `npm run dev`.
 
-Example isolated DB used in this project:
+## Windows note
 
-- DB: `guidebook_db`
-- User: `guidebook_user`
-
-## Project Structure (high-level)
-
-- `src/app` - routes and API handlers
-- `src/components` - UI components
-- `src/hooks` - React query/data hooks
-- `src/lib` - auth, compliance, db helpers
-- `prisma` - schema, migrations, seed
-
-## Production Notes
-
-- Use strong secrets in environment variables
-- Use managed PostgreSQL with backups
-- Run migrations as part of deployment pipeline
-- Keep `NEXTAUTH_URL` aligned with deployed URL
+Commands are shown for bash/zsh. On Windows, run equivalent commands in PowerShell and edit `.env` manually.

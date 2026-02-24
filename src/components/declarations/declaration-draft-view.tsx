@@ -12,7 +12,8 @@ type DeclarationDraftViewProps = {
 };
 
 export function DeclarationDraftView({ assignmentId }: DeclarationDraftViewProps) {
-  const { data, isLoading, isError, saveRemarks } = useDeclaration(assignmentId);
+  const { data, isLoading, isError, saveRemarks, exportDeclaration, isExporting } =
+    useDeclaration(assignmentId);
 
   if (isLoading) {
     return <p className="px-4 py-6 text-sm text-slate-700 sm:px-6">Loading declaration...</p>;
@@ -92,8 +93,8 @@ export function DeclarationDraftView({ assignmentId }: DeclarationDraftViewProps
           />
           <ExportDeclarationModal
             declarationData={data}
-            assignmentId={assignmentId}
-            disabled={isExported}
+            disabled={isExported || isExporting}
+            onConfirmExport={exportDeclaration}
           />
         </div>
       </div>

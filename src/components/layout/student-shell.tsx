@@ -24,9 +24,9 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
         title="Student Workspace"
         navItems={[
           { href: '/dashboard', label: 'Dashboard' },
-          { href: '/subjects', label: 'Subjects' },
           { href: '/assignments', label: 'Assignments' },
           { href: '/log', label: 'New Log' },
+          { href: '/reflections', label: 'Reflections' },
         ]}
         topSlot={<NotificationBanner />}
       >

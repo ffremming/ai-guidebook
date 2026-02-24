@@ -1,23 +1,22 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 
-import type { DeclarationData } from '@/hooks/useDeclaration';
+import type { DeclarationData, DeclarationExportResponse } from '@/hooks/useDeclaration';
 
 type ExportDeclarationModalProps = {
   declarationData: DeclarationData | null;
-  assignmentId: string;
   disabled?: boolean;
+  onConfirmExport: () => Promise<DeclarationExportResponse>;
 };
 
 export function ExportDeclarationModal({
   declarationData,
-  assignmentId,
   disabled = false,
+  onConfirmExport,
 }: ExportDeclarationModalProps) {
-  const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!declarationData) {
     return (
@@ -74,24 +73,25 @@ export function ExportDeclarationModal({
                 type="button"
                 onClick={() => setOpen(false)}
                 className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700"
+                disabled={isSubmitting}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const returnTo = `/declarations/${assignmentId}`;
-                  router.push(
-                    `/reflections?assignmentId=${encodeURIComponent(
-                      assignmentId,
-                    )}&triggerType=STANDARD_EXPORT&action=export&returnTo=${encodeURIComponent(
-                      returnTo,
-                    )}`,
-                  );
+                onClick={async () => {
+                  setIsSubmitting(true);
+                  try {
+                    await onConfirmExport();
+                    setOpen(false);
+                  } finally {
+                    setIsSubmitting(false);
+                  }
                 }}
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white"
+                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                disabled={isSubmitting}
               >
-                Continue to Reflection
+                {isSubmitting ? 'Exporting...' : 'Confirm Export'}
               </button>
             </div>
           </div>

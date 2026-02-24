@@ -2,7 +2,7 @@
 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'next/navigation';
 
@@ -66,25 +66,12 @@ type AssignmentUsageTreeResponse = {
   tree: AssignmentUsageTreeNode[];
 };
 
-type PendingReflectionResponse = {
-  requiresCompletion: boolean;
-  entries: Array<{
+type ReflectionNoteResponse = {
+  note: {
     id: string;
-    assignmentId: string;
-    triggerType: 'STANDARD_EXPORT' | 'COMPLIANCE_SERIOUS';
-    status: 'REQUIRED' | 'COMPLETED';
-    requiredForUnlock: boolean;
+    content: string;
     createdAt: string;
-  }>;
-  blockingEntry: {
-    id: string;
-    assignmentId: string;
-    triggerType: 'COMPLIANCE_SERIOUS';
-    status: 'REQUIRED' | 'COMPLETED';
-    requiredForUnlock: boolean;
-    createdAt: string;
-  } | null;
-  reflectionFeatureUnavailable?: boolean;
+  };
 };
 
 export type ManualLogFormValues = CreateLogInput;
@@ -270,25 +257,23 @@ async function fetchAssignmentUsageTree(assignmentId: string): Promise<Assignmen
   return (await response.json()) as AssignmentUsageTreeResponse;
 }
 
-async function fetchPendingSeriousReflection(
-  assignmentId: string,
-): Promise<PendingReflectionResponse> {
-  const response = await fetch(
-    `/api/reflections/pending?assignmentId=${encodeURIComponent(
-      assignmentId,
-    )}&triggerType=COMPLIANCE_SERIOUS`,
-    {
-      method: 'GET',
-      cache: 'no-store',
+async function createReflectionNote(payload: {
+  content: string;
+}): Promise<ReflectionNoteResponse> {
+  const response = await fetch('/api/reflection-notes', {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
     },
-  );
+    body: JSON.stringify(payload),
+  });
 
   if (!response.ok) {
-    const payload = (await response.json()) as { error?: string };
-    throw new Error(payload.error ?? 'Failed to load reflection status');
+    const errorPayload = (await response.json()) as ValidationErrorPayload;
+    throw errorPayload;
   }
 
-  return (await response.json()) as PendingReflectionResponse;
+  return (await response.json()) as ReflectionNoteResponse;
 }
 
 function SectionCard({
@@ -337,8 +322,10 @@ export function ManualLogForm({
   const [complianceJustificationTouched, setComplianceJustificationTouched] = useState(false);
   const [confirmedOwnership, setConfirmedOwnership] = useState(false);
   const [confirmedEvidence, setConfirmedEvidence] = useState(false);
-  const [isDesktopViewport, setIsDesktopViewport] = useState(false);
-  const triggeredSeriousReflectionAssignmentId = useRef<string | null>(null);
+  const [reflectionModalOpen, setReflectionModalOpen] = useState(false);
+  const [reflectionModalNodeId, setReflectionModalNodeId] = useState<string | null>(null);
+  const [reflectionModalText, setReflectionModalText] = useState('');
+  const [reflectionModalError, setReflectionModalError] = useState<string | null>(null);
 
   const assignmentsQuery = useQuery({
     queryKey: ['assignments'],
@@ -430,12 +417,6 @@ export function ManualLogForm({
     usageReason,
     selectedAssignmentId ? selectedAssignmentId : null,
   );
-  const seriousReflectionQuery = useQuery({
-    queryKey: ['pending-serious-reflection', selectedAssignmentId],
-    queryFn: () => fetchPendingSeriousReflection(selectedAssignmentId as string),
-    enabled: Boolean(selectedAssignmentId && isDesktopViewport),
-    refetchOnWindowFocus: false,
-  });
   const assignmentUsageTreeQuery = useQuery({
     queryKey: ['assignment-usage-tree-for-form', selectedAssignmentId],
     queryFn: () => fetchAssignmentUsageTree(selectedAssignmentId as string),
@@ -465,11 +446,6 @@ export function ManualLogForm({
 
     return selectedNodeIds.filter((nodeId) => disallowedNodeIds.has(nodeId));
   }, [usageSubsectionsValue, assignmentUsageTreeQuery.data?.tree]);
-  const isSeriousIntentFlag = complianceCheck.result?.isSerious ?? false;
-  const isSessionLockedForReflection =
-    isDesktopViewport &&
-    !seriousReflectionQuery.data?.reflectionFeatureUnavailable &&
-    Boolean(seriousReflectionQuery.data?.blockingEntry);
   const usageNodeStatusById = useMemo(() => {
     const result: Record<string, 'ALLOWED' | 'DISALLOWED' | 'MIXED'> = {};
     const stack = [...(assignmentUsageTreeQuery.data?.tree ?? [])];
@@ -596,81 +572,9 @@ export function ManualLogForm({
       setAssignmentCodeError(payload.error ?? 'Unable to add assignment by code');
     },
   });
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const mediaQuery = window.matchMedia('(min-width: 1024px)');
-    const apply = () => setIsDesktopViewport(mediaQuery.matches);
-    apply();
-
-    mediaQuery.addEventListener('change', apply);
-    return () => {
-      mediaQuery.removeEventListener('change', apply);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!selectedAssignmentId) {
-      triggeredSeriousReflectionAssignmentId.current = null;
-      return;
-    }
-
-    if (
-      !isDesktopViewport ||
-      !isSeriousIntentFlag ||
-      triggeredSeriousReflectionAssignmentId.current === selectedAssignmentId
-    ) {
-      return;
-    }
-
-    const run = async () => {
-      try {
-        const triggerResponse = await fetch('/api/reflections/trigger', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify({
-            assignmentId: selectedAssignmentId,
-            triggerType: 'COMPLIANCE_SERIOUS',
-          }),
-        });
-
-        if (!triggerResponse.ok) {
-          return;
-        }
-
-        triggeredSeriousReflectionAssignmentId.current = selectedAssignmentId;
-        const pending = await seriousReflectionQuery.refetch();
-        if (pending.data?.reflectionFeatureUnavailable) {
-          return;
-        }
-
-        const returnTo = editingLogId
-          ? `/log?logId=${encodeURIComponent(editingLogId)}`
-          : `/log?assignmentId=${encodeURIComponent(selectedAssignmentId)}`;
-        router.push(
-          `/reflections?assignmentId=${encodeURIComponent(
-            selectedAssignmentId,
-          )}&triggerType=COMPLIANCE_SERIOUS&returnTo=${encodeURIComponent(returnTo)}`,
-        );
-      } catch {
-        // Reflection is best-effort here; submit validation still enforces required fields.
-      }
-    };
-
-    void run();
-  }, [
-    editingLogId,
-    isDesktopViewport,
-    isSeriousIntentFlag,
-    router,
-    selectedAssignmentId,
-    seriousReflectionQuery,
-  ]);
+  const createReflectionNoteMutation = useMutation({
+    mutationFn: createReflectionNote,
+  });
 
   useEffect(() => {
     if (!editingLogQuery.data) {
@@ -724,18 +628,6 @@ export function ManualLogForm({
 
     if (!isContextComplete) {
       setSubmitError('Complete the context section before submitting the log.');
-      return;
-    }
-    if (isSessionLockedForReflection && selectedAssignmentId) {
-      const returnTo = editingLogId
-        ? `/log?logId=${encodeURIComponent(editingLogId)}`
-        : `/log?assignmentId=${encodeURIComponent(selectedAssignmentId)}`;
-      setSubmitError('Complete the serious-flag reflection before continuing this AI session.');
-      router.push(
-        `/reflections?assignmentId=${encodeURIComponent(
-          selectedAssignmentId,
-        )}&triggerType=COMPLIANCE_SERIOUS&returnTo=${encodeURIComponent(returnTo)}`,
-      );
       return;
     }
 
@@ -856,6 +748,49 @@ export function ManualLogForm({
     form.setValue('assignmentId', '', { shouldValidate: true });
   }
 
+  async function submitDisallowedReflection() {
+    setReflectionModalError(null);
+    const nodeId = reflectionModalNodeId;
+    const content = reflectionModalText.trim();
+
+    if (!nodeId) {
+      setReflectionModalError('No activity selected.');
+      return;
+    }
+    if (content.length === 0) {
+      setReflectionModalError('Write a reflection before submitting.');
+      return;
+    }
+
+    try {
+      const result = await createReflectionNoteMutation.mutateAsync({
+        content,
+      });
+
+      const current = form.getValues('usageSubsections') ?? [];
+      if (!current.includes(nodeId)) {
+        form.setValue('usageSubsections', [...current, nodeId], { shouldValidate: true });
+      }
+
+      const prefix = `[${new Date(result.note.createdAt).toLocaleString()}] `;
+      const line = `${prefix}${result.note.content}`.trim();
+      setComplianceJustificationInput((previous) => {
+        const currentText = (previous ?? prefilledComplianceJustification).trim();
+        if (!currentText) {
+          return line;
+        }
+        return `${currentText}\n\n${line}`;
+      });
+      setComplianceJustificationTouched(true);
+      setReflectionModalText('');
+      setReflectionModalNodeId(null);
+      setReflectionModalOpen(false);
+    } catch (error) {
+      const payload = error as ValidationErrorPayload;
+      setReflectionModalError(payload.error ?? 'Unable to store reflection');
+    }
+  }
+
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <section className="rounded-2xl border border-slate-200 bg-gradient-to-r from-white via-slate-50 to-white p-5">
@@ -880,7 +815,57 @@ export function ManualLogForm({
       !assignmentsQuery.isError &&
       !editingLogQuery.isLoading &&
       !editingLogQuery.isError ? (
-        <form onSubmit={form.handleSubmit(onSubmit)} className="mt-6 grid gap-6 lg:grid-cols-3" noValidate>
+        <>
+          {reflectionModalOpen ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+              <div className="w-full max-w-xl rounded-xl border border-slate-200 bg-white p-5 shadow-lg">
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+                  Required Reflection
+                </p>
+                <h3 className="mt-1 text-lg font-semibold text-slate-900">
+                  Disallowed activity selected
+                </h3>
+                <p className="mt-2 text-sm text-slate-700">
+                  Write a short reflection before this activity can be selected.
+                </p>
+                <textarea
+                  rows={6}
+                  value={reflectionModalText}
+                  onChange={(event) => setReflectionModalText(event.target.value)}
+                  className="mt-3 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
+                  placeholder="Why are you using this disallowed activity in this context?"
+                />
+                {reflectionModalError ? (
+                  <p className="mt-2 text-sm text-red-700">{reflectionModalError}</p>
+                ) : null}
+                <div className="mt-4 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setReflectionModalOpen(false);
+                      setReflectionModalNodeId(null);
+                      setReflectionModalText('');
+                      setReflectionModalError(null);
+                    }}
+                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700"
+                    disabled={createReflectionNoteMutation.isPending}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void submitDisallowedReflection()}
+                    className="rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                    disabled={createReflectionNoteMutation.isPending}
+                  >
+                    {createReflectionNoteMutation.isPending ? 'Submitting...' : 'Submit reflection'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <form onSubmit={form.handleSubmit(onSubmit)} className="mt-6 grid gap-6 lg:grid-cols-3" noValidate>
           <div className="space-y-5 lg:col-span-2">
             {submitError ? (
               <section className="rounded-md border border-red-200 bg-red-50 p-3" role="alert">
@@ -1019,43 +1004,7 @@ export function ManualLogForm({
               </div>
             </SectionCard>
 
-            {isContextComplete && isSessionLockedForReflection ? (
-              <SectionCard
-                step="2"
-                title="Reflection Required"
-                description="A serious policy flag was detected. Complete the justification entry to unlock this session."
-              >
-                <div className="rounded-xl border border-red-300 bg-red-50 p-4">
-                  <p className="text-sm font-semibold text-red-900">
-                    Session locked on desktop until reflection is saved.
-                  </p>
-                  <p className="mt-1 text-sm text-red-800">
-                    Open the reflection journal and submit your justification.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!selectedAssignmentId) {
-                        return;
-                      }
-                      const returnTo = editingLogId
-                        ? `/log?logId=${encodeURIComponent(editingLogId)}`
-                        : `/log?assignmentId=${encodeURIComponent(selectedAssignmentId)}`;
-                      router.push(
-                        `/reflections?assignmentId=${encodeURIComponent(
-                          selectedAssignmentId,
-                        )}&triggerType=COMPLIANCE_SERIOUS&returnTo=${encodeURIComponent(returnTo)}`,
-                      );
-                    }}
-                    className="mt-3 rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white"
-                  >
-                    Open Justification Entry
-                  </button>
-                </div>
-              </SectionCard>
-            ) : null}
-
-            {isContextComplete && !isSessionLockedForReflection ? (
+            {isContextComplete ? (
               <SectionCard
                 step="2"
                 title="Usage Classification"
@@ -1082,6 +1031,14 @@ export function ManualLogForm({
                     nodeStatusById={usageNodeStatusById}
                     conflictNodeIds={selectedConflictNodeIds}
                     onSubsectionToggle={(subsectionId, checked) => {
+                      if (checked && usageNodeStatusById?.[subsectionId] === 'DISALLOWED') {
+                        setReflectionModalError(null);
+                        setReflectionModalNodeId(subsectionId);
+                        setReflectionModalText('');
+                        setReflectionModalOpen(true);
+                        return;
+                      }
+
                       const current = form.getValues('usageSubsections') ?? [];
                       const next = checked
                         ? Array.from(new Set([...current, subsectionId]))
@@ -1208,7 +1165,7 @@ export function ManualLogForm({
               </SectionCard>
             ) : null}
 
-            {isContextComplete && !isEditMode && !isSessionLockedForReflection ? (
+            {isContextComplete && !isEditMode ? (
               <SectionCard
                 step="3"
                 title="Final Review"
@@ -1327,7 +1284,7 @@ export function ManualLogForm({
               </div>
             </section>
 
-            {isContextComplete && !isSessionLockedForReflection ? (
+            {isContextComplete ? (
               <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <CompliancePreviewPanel
                   isLoading={complianceCheck.isLoading}
@@ -1336,13 +1293,6 @@ export function ManualLogForm({
                   detectedCategory={complianceCheck.result?.detectedCategory ?? null}
                   ruleReferences={complianceCheck.result?.ruleReferences ?? []}
                 />
-              </section>
-            ) : isSessionLockedForReflection ? (
-              <section className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-red-700">Compliance Preview</p>
-                <p className="mt-2 text-sm text-red-800">
-                  A serious flag requires reflection before this session can continue.
-                </p>
               </section>
             ) : (
               <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1356,12 +1306,10 @@ export function ManualLogForm({
             <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
               <button
                 type="submit"
-                disabled={createLogMutation.isPending || updateLogMutation.isPending || isSessionLockedForReflection}
+                disabled={createLogMutation.isPending || updateLogMutation.isPending}
                 className="w-full rounded-md bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-60"
               >
-                {isSessionLockedForReflection
-                  ? 'Complete reflection to unlock'
-                  : createLogMutation.isPending || updateLogMutation.isPending
+                {createLogMutation.isPending || updateLogMutation.isPending
                   ? 'Submitting...'
                   : isEditMode
                     ? 'Save log'
@@ -1369,7 +1317,8 @@ export function ManualLogForm({
               </button>
             </div>
           </aside>
-        </form>
+          </form>
+        </>
       ) : null}
     </main>
   );
