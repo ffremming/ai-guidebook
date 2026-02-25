@@ -18,7 +18,7 @@ const plexMono = IBM_Plex_Mono({
 
 export const metadata: Metadata = {
   title: 'AI Guidebook',
-  description: 'AI usage logging, compliance checks, declarations, and policy administration.',
+  description: 'AI usage logging, compliance checks, and declarations.',
 };
 
 export default function RootLayout({

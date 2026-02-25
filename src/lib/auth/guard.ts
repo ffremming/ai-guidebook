@@ -6,31 +6,12 @@ type RequestWithAuth = NextRequest & { auth?: Session | null };
 
 const PUBLIC_PATHS = ['/login', '/callback'];
 const STATIC_PREFIXES = ['/api/auth', '/api/compliance/classify', '/_next', '/favicon.ico'];
-const ADMIN_PATH_PREFIXES = ['/admin', '/policies'];
 
 function isPublicPath(pathname: string) {
   return (
     PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`)) ||
     STATIC_PREFIXES.some((prefix) => pathname.startsWith(prefix))
   );
-}
-
-function isAdminPagePath(pathname: string) {
-  return ADMIN_PATH_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  );
-}
-
-function isAdminPolicyApiWrite(pathname: string, method: string) {
-  if (method !== 'POST') {
-    return false;
-  }
-
-  if (pathname === '/api/policies') {
-    return true;
-  }
-
-  return /^\/api\/policies\/[^/]+\/publish$/.test(pathname);
 }
 
 function forbiddenResponse(pathname: string) {
@@ -62,10 +43,7 @@ export function authGuard(request: RequestWithAuth) {
     return unauthenticatedResponse(pathname, request.url);
   }
 
-  const requiresAdmin =
-    isAdminPagePath(pathname) || isAdminPolicyApiWrite(pathname, request.method);
-
-  if (requiresAdmin && session.user.role !== UserRole.ADMIN) {
+  if (session.user.role !== UserRole.ADMIN && pathname.startsWith('/admin')) {
     return forbiddenResponse(pathname);
   }
 

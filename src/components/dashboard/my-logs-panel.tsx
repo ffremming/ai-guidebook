@@ -60,19 +60,19 @@ function normalizeToolLabel(raw: string | null | undefined): string {
   return firstLine;
 }
 
-function normalizeCategoryLabel(raw: string | null | undefined): string {
-  const value = (raw ?? '').trim();
-  if (!value || /^unknown$/i.test(value) || /^unclassified$/i.test(value)) {
-    return 'Unclassified';
-  }
-  return value;
-}
-
 function rootTypeColor(sectionId: string): {
   barClass: string;
   dotClass: string;
   labelClass: string;
 } {
+  if (sectionId === 'no-ai') {
+    return {
+      barClass: 'bg-slate-500',
+      dotClass: 'bg-slate-500',
+      labelClass: 'text-slate-700',
+    };
+  }
+
   if (sectionId === 'writing') {
     return {
       barClass: 'bg-sky-600',
@@ -165,8 +165,9 @@ export function MyLogsPanel() {
     const toolCounts = new Map<string, number>();
     const categoryCounts = new Map<string, number>();
     const activityCounts = new Map<string, number>();
+    const nonCompliantActivityCounts = new Map<string, number>();
     let unspecifiedToolCount = 0;
-    let unclassifiedCategoryCount = 0;
+    let uncategorizedRootCount = 0;
     let nonCompliant = 0;
     let warnings = 0;
 
@@ -178,17 +179,28 @@ export function MyLogsPanel() {
         toolCounts.set(normalizedTool, (toolCounts.get(normalizedTool) ?? 0) + 1);
       }
 
-      const normalizedCategory = normalizeCategoryLabel(log.actualUsageCategory);
-      if (normalizedCategory === 'Unclassified') {
-        unclassifiedCategoryCount += 1;
+      const rootSections = getTopLevelSectionsForSelections(log.usageSubsections ?? []);
+      if (rootSections.length === 0) {
+        uncategorizedRootCount += 1;
       } else {
-        categoryCounts.set(normalizedCategory, (categoryCounts.get(normalizedCategory) ?? 0) + 1);
+        for (const section of rootSections) {
+          categoryCounts.set(section.label, (categoryCounts.get(section.label) ?? 0) + 1);
+        }
       }
       for (const nodeId of log.usageSubsections ?? []) {
         if (!isLeafUsageNodeId(nodeId)) {
           continue;
         }
         activityCounts.set(nodeId, (activityCounts.get(nodeId) ?? 0) + 1);
+      }
+      for (const nodeId of log.disallowedUsageNodeIds ?? []) {
+        if (!isLeafUsageNodeId(nodeId)) {
+          continue;
+        }
+        nonCompliantActivityCounts.set(
+          nodeId,
+          (nonCompliantActivityCounts.get(nodeId) ?? 0) + 1,
+        );
       }
 
       const effectiveStatus = getEffectiveComplianceStatus(log);
@@ -216,9 +228,19 @@ export function MyLogsPanel() {
         count,
       }))
       .sort((a, b) => b.count - a.count);
+    const topNonCompliantActivities = Array.from(nonCompliantActivityCounts.entries())
+      .map(([nodeId, count]) => ({
+        section: getTopLevelSectionsForSelections([nodeId])[0] ?? null,
+        nodeId,
+        label: usageNodeLabelMap.get(nodeId) ?? nodeId,
+        count,
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
     const maxToolCount = topTools[0]?.count ?? 1;
     const maxCategoryCount = topCategories[0]?.count ?? 1;
     const maxActivityCount = activityStats[0]?.count ?? 1;
+    const maxNonCompliantActivityCount = topNonCompliantActivities[0]?.count ?? 1;
 
     return {
       total: logs.length,
@@ -229,9 +251,11 @@ export function MyLogsPanel() {
       maxToolCount,
       maxCategoryCount,
       unspecifiedToolCount,
-      unclassifiedCategoryCount,
+      uncategorizedRootCount,
       activityStats,
       maxActivityCount,
+      topNonCompliantActivities,
+      maxNonCompliantActivityCount,
     };
   }, [logs, usageNodeLabelMap]);
 
@@ -305,7 +329,7 @@ export function MyLogsPanel() {
           <article className="rounded-lg border border-slate-200 bg-white/80 p-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Top Categories</p>
             {stats.topCategories.length === 0 ? (
-              <p className="mt-2 text-xs text-slate-600">No classified categories yet.</p>
+              <p className="mt-2 text-xs text-slate-600">No categories yet.</p>
             ) : (
               <div className="mt-2 space-y-2">
                 {stats.topCategories.map((item) => (
@@ -324,9 +348,9 @@ export function MyLogsPanel() {
                 ))}
               </div>
             )}
-            {stats.unclassifiedCategoryCount > 0 ? (
+            {stats.uncategorizedRootCount > 0 ? (
               <p className="mt-2 text-[11px] text-slate-500">
-                Unclassified logs: {stats.unclassifiedCategoryCount}
+                Uncategorized: {stats.uncategorizedRootCount}
               </p>
             ) : null}
           </article>
@@ -370,6 +394,53 @@ export function MyLogsPanel() {
               </div>
             )}
           </article>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+            Top Conflicting Categories
+          </p>
+          {stats.topNonCompliantActivities.length === 0 ? (
+            <p className="mt-2 text-xs text-amber-800/80">No flagged activity selected.</p>
+          ) : (
+            <div className="mt-2 space-y-2">
+              <div className="flex h-5 w-full overflow-hidden rounded-full bg-amber-100">
+                {(() => {
+                  const total = stats.topNonCompliantActivities.reduce((sum, a) => sum + a.count, 0);
+                  return stats.topNonCompliantActivities.map((activity) => {
+                    const pct = (activity.count / total) * 100;
+                    return (
+                      <div
+                        key={activity.nodeId}
+                        className={`h-full ${rootTypeColor(activity.section?.id ?? '').barClass}`}
+                        style={{ width: `${pct}%` }}
+                        title={`${activity.label}: ${Math.round(pct)}%`}
+                      />
+                    );
+                  });
+                })()}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                {(() => {
+                  const total = stats.topNonCompliantActivities.reduce((sum, a) => sum + a.count, 0);
+                  return stats.topNonCompliantActivities.map((activity) => {
+                    const pct = Math.round((activity.count / total) * 100);
+                    return (
+                      <span key={activity.nodeId} className="inline-flex items-center gap-1.5 text-xs">
+                        <span
+                          className={`inline-block h-2 w-2 rounded-full ${
+                            rootTypeColor(activity.section?.id ?? '').dotClass
+                          }`}
+                        />
+                        <span className="font-medium text-slate-800">{activity.label}</span>
+                        <span className="font-semibold text-amber-800">{pct}%</span>
+                      </span>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

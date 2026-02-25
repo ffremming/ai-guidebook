@@ -1,30 +1,12 @@
 'use client';
 
 import { MyLogsPanel } from '@/components/dashboard/my-logs-panel';
-import { StaffDashboardPage } from '@/components/dashboard/staff-dashboard-page';
-import { useDashboard } from '@/hooks/useDashboard';
-import { UserRole } from '@prisma/client';
 
 type DashboardPageProps = {
   toast?: string;
-  userRole: UserRole;
 };
 
-export function DashboardPage({ toast, userRole }: DashboardPageProps) {
-  const dashboard = useDashboard();
-
-  if (userRole === UserRole.INSTRUCTOR || userRole === UserRole.ADMIN) {
-    return <StaffDashboardPage />;
-  }
-
-  if (dashboard.isLoading) {
-    return <p className="px-2 py-4 text-sm text-slate-700">Loading dashboard...</p>;
-  }
-
-  if (dashboard.isError || !dashboard.data) {
-    return <p className="px-2 py-4 text-sm text-red-700">Failed to load dashboard.</p>;
-  }
-
+export function DashboardPage({ toast }: DashboardPageProps) {
   const showLogToast = toast === 'log-created';
   const showResolutionToast = toast === 'resolution-submitted';
 
@@ -49,9 +31,6 @@ export function DashboardPage({ toast, userRole }: DashboardPageProps) {
 
       <header className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h1 className="text-2xl font-semibold text-slate-900">Personal Dashboard</h1>
-        <p className="mt-1 text-sm text-slate-700">
-          Unread policy notifications: {dashboard.data.unreadNotificationCount}
-        </p>
       </header>
 
       <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">

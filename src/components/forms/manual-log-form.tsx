@@ -7,7 +7,11 @@ import { useFieldArray, useForm, useWatch } from 'react-hook-form';
 import { useRouter } from 'next/navigation';
 
 import { useComplianceCheck } from '@/hooks/useComplianceCheck';
-import { getUsageLabelsForSelections } from '@/lib/usage-taxonomy';
+import {
+  getTopLevelSectionsForSelections,
+  getUsageNodeIdPath,
+  getUsageTreeRootNodes,
+} from '@/lib/usage-taxonomy';
 import { createLogSchema, type CreateLogInput } from '@/lib/validations/log.schema';
 
 import { AssignmentSelector } from './assignment-selector';
@@ -30,14 +34,6 @@ type AssignmentItem = {
 
 type AssignmentsResponse = {
   assignments: AssignmentItem[];
-};
-
-type JoinAssignmentPayload = {
-  assignmentCode: string;
-};
-
-type JoinAssignmentResponse = {
-  assignment: AssignmentItem;
 };
 
 type LogDetailResponse = {
@@ -81,51 +77,8 @@ type ValidationErrorPayload = {
   fields?: Record<string, string[]>;
 };
 
-const COMMENT_AI_HEADER = 'AI tool/model:';
-const COMMENT_REASON_HEADER = 'Why you used AI and what you asked for:';
-const COMMENT_SESSION_HEADER = 'Session details (optional but recommended):';
 const COMPLIANCE_JUSTIFICATION_HEADER = 'Compliance break justification:';
 const COMPLIANCE_JUSTIFICATION_END_MARKER = '\n\n[End Compliance Justification]\n\n';
-
-function composeIntegratedComment(aiTool: string, usageReason: string, sessionDescription: string): string {
-  return `${COMMENT_AI_HEADER}
-${aiTool}
-
-${COMMENT_REASON_HEADER}
-${usageReason}
-
-${COMMENT_SESSION_HEADER}
-${sessionDescription}`;
-}
-
-function parseIntegratedComment(text: string): {
-  aiTool: string;
-  usageReason: string;
-  sessionDescription: string;
-} {
-  const normalized = text.replace(/\r\n/g, '\n');
-
-  const aiTool =
-    normalized.match(/AI tool\/model:\s*([^\n]*)/i)?.[1]?.trim() ?? '';
-
-  const usageReason =
-    normalized
-      .match(
-        /Why you used AI and what you asked for:\s*([\s\S]*?)(?:\nSession details \(optional but recommended\):|$)/i,
-      )?.[1]
-      ?.trim() ?? normalized.trim();
-
-  const sessionDescription =
-    normalized
-      .match(/Session details \(optional but recommended\):\s*([\s\S]*)$/i)?.[1]
-      ?.trim() ?? '';
-
-  return {
-    aiTool,
-    usageReason,
-    sessionDescription,
-  };
-}
 
 function parseComplianceJustification(sessionDescription: string | null): {
   justification: string;
@@ -213,23 +166,6 @@ async function updateLog(logId: string, payload: CreateLogInput) {
   return response.json();
 }
 
-async function joinAssignmentByCode(payload: JoinAssignmentPayload): Promise<JoinAssignmentResponse> {
-  const response = await fetch('/api/assignments', {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorPayload = (await response.json()) as ValidationErrorPayload;
-    throw errorPayload;
-  }
-
-  return (await response.json()) as JoinAssignmentResponse;
-}
-
 async function fetchLogById(logId: string): Promise<LogDetailResponse> {
   const response = await fetch(`/api/logs/${logId}`, {
     method: 'GET',
@@ -311,17 +247,11 @@ export function ManualLogForm({
   const editingLogId = initialLogId;
   const isEditMode = Boolean(editingLogId);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [contextMode, setContextMode] = useState<'search' | 'code' | null>('search');
   const [selectedCourseIdOverride, setSelectedCourseIdOverride] = useState<string | null>(null);
-  const [assignmentCodeInput, setAssignmentCodeInput] = useState('');
-  const [assignmentCodeError, setAssignmentCodeError] = useState<string | null>(null);
-  const [assignmentCodeSuccess, setAssignmentCodeSuccess] = useState<string | null>(null);
-  const [integratedComment, setIntegratedComment] = useState('');
-  const [commentAppliedNotice, setCommentAppliedNotice] = useState<string | null>(null);
+  const [integratedComment, setIntegratedComment] = useState<string | null>(null);
   const [complianceJustificationInput, setComplianceJustificationInput] = useState<string | null>(null);
   const [complianceJustificationTouched, setComplianceJustificationTouched] = useState(false);
   const [confirmedOwnership, setConfirmedOwnership] = useState(false);
-  const [confirmedEvidence, setConfirmedEvidence] = useState(false);
   const [reflectionModalOpen, setReflectionModalOpen] = useState(false);
   const [reflectionModalNodeId, setReflectionModalNodeId] = useState<string | null>(null);
   const [reflectionModalText, setReflectionModalText] = useState('');
@@ -401,17 +331,53 @@ export function ManualLogForm({
   }, [allAssignments, selectedCourseId]);
   const selectedCourse = courses.find((course) => course.id === selectedCourseId) ?? null;
   const selectedAssignment = allAssignments.find((assignment) => assignment.id === selectedAssignmentId) ?? null;
-  const isContextComplete = Boolean(contextMode && selectedCourseId && selectedAssignmentId);
+  const isContextComplete = Boolean(selectedCourseId && selectedAssignmentId);
   const selectedEvidenceCount = (usageEvidence ?? []).filter(
     (item) => item.text.trim().length > 0,
   ).length;
 
-  const usageLabels = useMemo(() => {
-    if (!usageSubsectionsValue || usageSubsectionsValue.length === 0) {
-      return null;
+  const usageNodeLabelMap = useMemo(() => {
+    const result = new Map<string, string>();
+    const stack = [...getUsageTreeRootNodes()];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      if (!node) {
+        continue;
+      }
+      result.set(node.id, node.label);
+      if (node.children && node.children.length > 0) {
+        stack.push(...node.children);
+      }
     }
-    return getUsageLabelsForSelections(usageSubsectionsValue);
+    return result;
+  }, []);
+  const selectedRootLabels = useMemo(() => {
+    if (!usageSubsectionsValue || usageSubsectionsValue.length === 0) {
+      return [];
+    }
+    return getTopLevelSectionsForSelections(usageSubsectionsValue).map((section) => section.label);
   }, [usageSubsectionsValue]);
+  const previewActivityItems = useMemo(() => {
+    const selected = Array.from(new Set(usageSubsectionsValue ?? []));
+    if (selected.length === 0) {
+      return [];
+    }
+
+    const deepestOnly = selected.filter((nodeId) => {
+      return !selected.some((otherId) => {
+        if (otherId === nodeId) {
+          return false;
+        }
+        return getUsageNodeIdPath(otherId).includes(nodeId);
+      });
+    });
+
+    return deepestOnly.map((nodeId) => ({
+      id: nodeId,
+      label: usageNodeLabelMap.get(nodeId) ?? nodeId,
+      rootLabel: getTopLevelSectionsForSelections([nodeId])[0]?.label ?? null,
+    }));
+  }, [usageNodeLabelMap, usageSubsectionsValue]);
 
   const complianceCheck = useComplianceCheck(
     usageReason,
@@ -467,31 +433,26 @@ export function ManualLogForm({
   const completionChecks = useMemo(
     () => [
       {
-        label:
-          contextMode === 'code'
-            ? 'Course unlocked by assignment code'
-            : 'Course selected',
+        label: 'Course',
         done: Boolean(selectedCourseId),
       },
-      { label: 'Assignment selected', done: Boolean(selectedAssignmentId) },
+      { label: 'Assignment', done: Boolean(selectedAssignmentId) },
       {
-        label: 'AI usage tree tagged',
+        label: 'Activities',
         done: Boolean((usageSubsectionsValue?.length ?? 0) > 0),
       },
       {
-        label: 'Compliance break justification',
+        label: 'Justification',
         done:
           selectedConflictNodeIds.length === 0 ||
           (complianceJustificationInput ??
             parseComplianceJustification(editingLogQuery.data?.sessionDescription ?? '').justification)
             .trim().length > 0,
       },
-      { label: 'Comment added (optional)', done: true },
-      { label: 'Ownership confirmed', done: isEditMode || confirmedOwnership },
-      { label: 'Evidence accessibility confirmed', done: isEditMode || confirmedEvidence },
+      { label: 'Comment', done: true },
+      { label: 'Ownership', done: isEditMode || confirmedOwnership },
     ],
     [
-      contextMode,
       selectedCourseId,
       selectedAssignmentId,
       usageSubsectionsValue,
@@ -500,27 +461,13 @@ export function ManualLogForm({
       selectedConflictNodeIds,
       complianceJustificationInput,
       confirmedOwnership,
-      confirmedEvidence,
     ],
   );
 
   const completedCount = completionChecks.filter((check) => check.done).length;
   const readinessPercent = Math.round((completedCount / completionChecks.length) * 100);
-  const prefilledIntegratedComment = useMemo(() => {
-    if (!isEditMode || !editingLogQuery.data) {
-      return '';
-    }
-    const parsedSession = parseComplianceJustification(
-      editingLogQuery.data.sessionDescription ?? '',
-    );
-
-    return composeIntegratedComment(
-      editingLogQuery.data.aiTool ?? '',
-      editingLogQuery.data.usageReason ?? '',
-      parsedSession.sessionDescription,
-    );
-  }, [editingLogQuery.data, isEditMode]);
-  const currentIntegratedComment = integratedComment || prefilledIntegratedComment;
+  const currentIntegratedComment =
+    integratedComment ?? (editingLogQuery.data?.usageReason ?? '');
   const prefilledComplianceJustification = useMemo(() => {
     if (!isEditMode || !editingLogQuery.data) {
       return '';
@@ -551,25 +498,6 @@ export function ManualLogForm({
       await queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       await queryClient.invalidateQueries({ queryKey: ['my-logs'] });
       router.push('/dashboard?toast=log-created');
-    },
-  });
-
-  const joinAssignmentMutation = useMutation({
-    mutationFn: joinAssignmentByCode,
-    onSuccess: async ({ assignment }) => {
-      setAssignmentCodeError(null);
-      setAssignmentCodeSuccess(
-        `Added ${assignment.title} (${assignment.assignmentCode}).`,
-      );
-      setAssignmentCodeInput('');
-      await queryClient.invalidateQueries({ queryKey: ['assignments'] });
-      setSelectedCourseIdOverride(assignment.courseId);
-      form.setValue('assignmentId', assignment.id, { shouldValidate: true });
-    },
-    onError: (error) => {
-      const payload = error as unknown as ValidationErrorPayload;
-      setAssignmentCodeSuccess(null);
-      setAssignmentCodeError(payload.error ?? 'Unable to add assignment by code');
     },
   });
   const createReflectionNoteMutation = useMutation({
@@ -622,7 +550,6 @@ export function ManualLogForm({
 
   async function onSubmit(values: ManualLogFormValues) {
     setSubmitError(null);
-    setCommentAppliedNotice(null);
     form.clearErrors();
     setComplianceJustificationTouched(true);
 
@@ -631,7 +558,6 @@ export function ManualLogForm({
       return;
     }
 
-    const parsedComment = parseIntegratedComment(currentIntegratedComment);
     if (
       requiresComplianceJustification &&
       currentComplianceJustification.trim().length === 0
@@ -639,12 +565,11 @@ export function ManualLogForm({
       setSubmitError('Add a justification for the compliance break before submitting.');
       return;
     }
-    const sessionDescriptionValue =
-      (values.sessionDescription ?? '').trim() || parsedComment.sessionDescription;
+    const sessionDescriptionValue = (values.sessionDescription ?? '').trim();
     const payload: ManualLogFormValues = {
       ...values,
-      aiTool: values.aiTool.trim() || parsedComment.aiTool,
-      usageReason: values.usageReason.trim() || parsedComment.usageReason,
+      aiTool: values.aiTool.trim(),
+      usageReason: currentIntegratedComment.trim(),
       sessionDescription: requiresComplianceJustification
         ? composeSessionDescriptionWithJustification(
             sessionDescriptionValue,
@@ -653,8 +578,8 @@ export function ManualLogForm({
         : sessionDescriptionValue,
     };
 
-    if (!isEditMode && (!confirmedOwnership || !confirmedEvidence)) {
-      setSubmitError('Confirm both attestations before submitting.');
+    if (!isEditMode && !confirmedOwnership) {
+      setSubmitError('Confirm ownership before submitting.');
       return;
     }
 
@@ -685,67 +610,12 @@ export function ManualLogForm({
     }
   }
 
-  async function onJoinByCode() {
-    setAssignmentCodeError(null);
-    setAssignmentCodeSuccess(null);
-
-    const normalized = assignmentCodeInput.trim().toUpperCase();
-    if (!normalized) {
-      setAssignmentCodeError('Enter an assignment code.');
-      return;
-    }
-
-    try {
-      await joinAssignmentMutation.mutateAsync({
-        assignmentCode: normalized,
-      });
-    } catch {
-      // Error state is already set in mutation.onError.
-    }
-  }
-
   function onChangeIntegratedComment(nextText: string) {
     setIntegratedComment(nextText);
-    setCommentAppliedNotice(null);
-    const parsed = parseIntegratedComment(nextText);
-
-    form.setValue('aiTool', parsed.aiTool, { shouldValidate: true, shouldDirty: true });
-    form.setValue('usageReason', parsed.usageReason, {
+    form.setValue('usageReason', nextText, {
       shouldValidate: true,
       shouldDirty: true,
     });
-    form.setValue('sessionDescription', parsed.sessionDescription, {
-      shouldValidate: true,
-      shouldDirty: true,
-    });
-  }
-
-  function applyIntegratedCommentToForm() {
-    const parsed = parseIntegratedComment(currentIntegratedComment);
-
-    form.setValue('aiTool', parsed.aiTool, { shouldValidate: true, shouldDirty: true });
-    form.setValue('usageReason', parsed.usageReason, {
-      shouldValidate: true,
-      shouldDirty: true,
-    });
-    form.setValue('sessionDescription', parsed.sessionDescription, {
-      shouldValidate: true,
-      shouldDirty: true,
-    });
-    setCommentAppliedNotice('Comment applied to the submission.');
-  }
-
-  function onChangeContextMode(nextMode: 'search' | 'code') {
-    if (contextMode === nextMode) {
-      return;
-    }
-
-    setContextMode(nextMode);
-    setAssignmentCodeError(null);
-    setAssignmentCodeSuccess(null);
-    setAssignmentCodeInput('');
-    setSelectedCourseIdOverride(null);
-    form.setValue('assignmentId', '', { shouldValidate: true });
   }
 
   async function submitDisallowedReflection() {
@@ -794,14 +664,10 @@ export function ManualLogForm({
   return (
     <main className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
       <section className="rounded-2xl border border-slate-200 bg-gradient-to-r from-white via-slate-50 to-white p-5">
-        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">AI Logging Workspace</p>
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">New Log</p>
         <h1 className="mt-1 text-2xl font-semibold text-slate-900 sm:text-3xl">
           {isEditMode ? 'Edit AI usage log' : 'Manual AI usage log'}
         </h1>
-        <p className="mt-2 max-w-3xl text-sm text-slate-700">
-          This view is optimized for students writing logs and for teachers reviewing them later.
-          Focus on clear, verifiable evidence and concrete usage descriptions.
-        </p>
       </section>
 
       {assignmentsQuery.isLoading || editingLogQuery.isLoading ? (
@@ -870,154 +736,44 @@ export function ManualLogForm({
             {submitError ? (
               <section className="rounded-md border border-red-200 bg-red-50 p-3" role="alert">
                 <p className="text-sm font-medium text-red-800">{submitError}</p>
-                <p className="mt-1 text-xs text-red-700">
-                  Resolve highlighted issues and submit again.
-                </p>
               </section>
             ) : null}
 
-            <SectionCard
-              step="1"
-              title="Context"
-              description="Select where this log belongs. Instructors use this for assignment-level review."
-            >
+            <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
               <div className="space-y-4">
-                <div className="rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 p-3 sm:p-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
-                    Context Method
-                  </p>
-                  <p className="mt-1 text-sm text-slate-700">
-                    Choose exactly one way to attach this log.
-                  </p>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                    <button
-                      type="button"
-                      onClick={() => onChangeContextMode('search')}
-                      className={`rounded-lg border px-4 py-3 text-left transition ${
-                        contextMode === 'search'
-                          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                          : 'border-slate-300 bg-white text-slate-900 hover:border-slate-400'
-                      }`}
-                      aria-pressed={contextMode === 'search'}
-                    >
-                      <p className="text-sm font-semibold">Search Subjects</p>
-                      <p className={`mt-1 text-xs ${contextMode === 'search' ? 'text-slate-200' : 'text-slate-600'}`}>
-                        Find by subject and assignment title/code.
-                      </p>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onChangeContextMode('code')}
-                      className={`rounded-lg border px-4 py-3 text-left transition ${
-                        contextMode === 'code'
-                          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-                          : 'border-slate-300 bg-white text-slate-900 hover:border-slate-400'
-                      }`}
-                      aria-pressed={contextMode === 'code'}
-                    >
-                      <p className="text-sm font-semibold">Use Assignment Code</p>
-                      <p className={`mt-1 text-xs ${contextMode === 'code' ? 'text-slate-200' : 'text-slate-600'}`}>
-                        Join instantly with an exclusive assignment code.
-                      </p>
-                    </button>
-                  </div>
-                </div>
+                <CourseSelector
+                  courses={courses}
+                  selectedCourseId={selectedCourseId}
+                  onSelect={(courseId) => {
+                    setSelectedCourseIdOverride(courseId);
+                    form.setValue('assignmentId', '');
+                  }}
+                />
 
-                {contextMode === 'code' ? (
-                  <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <label htmlFor="assignment-code" className="block text-sm font-medium text-slate-900">
-                      Add assignment by code
-                    </label>
-                    <p className="text-xs text-slate-600">
-                      Paste your exclusive code to unlock assignment context.
-                    </p>
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <input
-                        id="assignment-code"
-                        type="text"
-                        value={assignmentCodeInput}
-                        onChange={(event) => setAssignmentCodeInput(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            void onJoinByCode();
-                          }
-                        }}
-                        placeholder="e.g. TDT4290-PROPOSAL"
-                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void onJoinByCode()}
-                        disabled={joinAssignmentMutation.isPending}
-                        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                      >
-                        {joinAssignmentMutation.isPending ? 'Adding...' : 'Add by code'}
-                      </button>
-                    </div>
-                    {assignmentCodeError ? (
-                      <p className="text-sm text-red-700">{assignmentCodeError}</p>
-                    ) : null}
-                    {assignmentCodeSuccess ? (
-                      <p className="text-sm text-emerald-700">{assignmentCodeSuccess}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {contextMode === 'search' ? (
-                  <>
-                    <CourseSelector
-                      courses={courses}
-                      selectedCourseId={selectedCourseId}
-                      onSelect={(courseId) => {
-                        setSelectedCourseIdOverride(courseId);
-                        form.setValue('assignmentId', '');
-                      }}
-                    />
-
-                    <AssignmentSelector
-                      assignments={filteredAssignments}
-                      value={selectedAssignmentId}
-                      disabled={!selectedCourseId}
-                      error={form.formState.errors.assignmentId?.message}
-                      onChange={(value) => form.setValue('assignmentId', value, { shouldValidate: true })}
-                    />
-                  </>
-                ) : null}
-
-                {!isContextComplete ? (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
-                    <p className="text-sm font-medium text-amber-900">
-                      Complete Context to unlock Step 2.
-                    </p>
-                    <p className="mt-1 text-xs text-amber-800">
-                      Choose one method and select or add an assignment.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2">
-                    <p className="text-sm font-medium text-emerald-900">
-                      Context complete. Next steps are unlocked.
-                    </p>
-                  </div>
-                )}
+                <AssignmentSelector
+                  assignments={filteredAssignments}
+                  value={selectedAssignmentId}
+                  disabled={!selectedCourseId}
+                  error={form.formState.errors.assignmentId?.message}
+                  onChange={(value) => form.setValue('assignmentId', value, { shouldValidate: true })}
+                />
               </div>
-            </SectionCard>
+            </section>
 
             {isContextComplete ? (
               <SectionCard
                 step="2"
-                title="Usage Classification"
-                description="Tag the usage taxonomy and provide a short session narrative."
+                title="Usage"
+                description="Tag activities and add your comment."
               >
                 <div className="space-y-5">
                   {assignmentUsageTreeQuery.isLoading ? (
                     <p className="text-xs text-slate-600">
-                      Loading assignment activity rules...
+                      Loading activity rules...
                     </p>
                   ) : assignmentUsageTreeQuery.isError ? (
                     <p className="text-xs text-amber-700">
-                      Could not load assignment rule badges. You can still select activities.
+                      Could not load rule badges.
                     </p>
                   ) : null}
                   <UsageTaxonomySelector
@@ -1090,7 +846,7 @@ export function ManualLogForm({
                           Justify the rule/compliance break
                         </label>
                         <p className="text-xs text-slate-700">
-                          Required when you select an activity that is disallowed.
+                          Required for disallowed selections.
                         </p>
                         <textarea
                           id="compliance-justification"
@@ -1116,38 +872,14 @@ export function ManualLogForm({
                       </div>
                     ) : null}
                     <div className="space-y-2 rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-4">
-                      <label htmlFor="integrated-comment" className="block text-sm font-semibold text-slate-900">
-                        Structured comment
-                      </label>
-                      <p className="text-xs text-slate-600">
-                        Write one coherent note. Keep the headings and fill each block.
-                      </p>
                       <textarea
                         id="integrated-comment"
                         rows={8}
                         value={currentIntegratedComment}
                         onChange={(event) => onChangeIntegratedComment(event.target.value)}
-                        placeholder={`${COMMENT_AI_HEADER}\nChatGPT, Claude, Gemini...\n\n${COMMENT_REASON_HEADER}\nDescribe your intent, prompts, and boundaries.\n\n${COMMENT_SESSION_HEADER}\nSummarize key AI outputs and what you accepted/rejected.`}
+                        placeholder="Write a short summary of your AI usage for this assignment."
                         className="w-full rounded-lg border border-slate-300 bg-white px-3 py-3 font-mono text-sm text-slate-900 shadow-inner"
                       />
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={applyIntegratedCommentToForm}
-                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-800 hover:bg-slate-50"
-                          >
-                            Apply comment
-                          </button>
-                        </div>
-                        {commentAppliedNotice ? (
-                          <p className="text-xs text-emerald-700">{commentAppliedNotice}</p>
-                        ) : (
-                          <p className="text-xs text-slate-500">
-                            Apply the structured comment, then submit using the bottom button.
-                          </p>
-                        )}
-                      </div>
                       {form.formState.errors.aiTool?.message ? (
                         <p className="text-sm text-red-700">{form.formState.errors.aiTool.message}</p>
                       ) : null}
@@ -1169,7 +901,7 @@ export function ManualLogForm({
               <SectionCard
                 step="3"
                 title="Final Review"
-                description="Confirm attestations before submitting."
+                description="Confirm and submit."
               >
                 <div className="space-y-3">
                 <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
@@ -1183,18 +915,6 @@ export function ManualLogForm({
                     I confirm the final submitted work remains my own and this log accurately represents AI support.
                   </span>
                 </label>
-
-                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <input
-                    type="checkbox"
-                    checked={confirmedEvidence}
-                    onChange={(event) => setConfirmedEvidence(event.target.checked)}
-                    className="mt-0.5"
-                  />
-                  <span className="text-sm text-slate-800">
-                    I confirm the conversation links are accessible and map to this assignment.
-                  </span>
-                </label>
                 </div>
               </SectionCard>
             ) : null}
@@ -1202,7 +922,7 @@ export function ManualLogForm({
 
           <aside className="space-y-4 lg:sticky lg:top-4 lg:h-fit">
             <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Readiness</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Progress</p>
               <p className="mt-1 text-2xl font-semibold text-slate-900">{readinessPercent}%</p>
               <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
                 <div
@@ -1227,16 +947,11 @@ export function ManualLogForm({
             </section>
 
             <section className="rounded-xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-4 shadow-sm">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Instructor Review Preview</p>
-                <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                  Live
-                </span>
-              </div>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Preview</p>
 
               <div className="mt-3 space-y-3 text-sm text-slate-800">
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Assignment</p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Context</p>
                   <p className="mt-1 font-medium text-slate-900">
                     {selectedCourse ? `${selectedCourse.courseCode}` : 'No course selected'}
                     {selectedAssignment ? ` • ${selectedAssignment.title}` : ''}
@@ -1244,10 +959,10 @@ export function ManualLogForm({
                 </div>
 
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">AI Usage Tags</p>
-                  {usageLabels?.sectionLabels?.length ? (
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Tags</p>
+                  {selectedRootLabels.length > 0 ? (
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {usageLabels.sectionLabels.map((label) => (
+                      {selectedRootLabels.map((label) => (
                         <span
                           key={label}
                           className="rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700"
@@ -1256,25 +971,21 @@ export function ManualLogForm({
                         </span>
                       ))}
                     </div>
-                  ) : (
-                    <p className="mt-1 text-xs text-slate-500">No category selected.</p>
-                  )}
-                  {usageLabels?.subsectionLabelPaths?.length ? (
-                    <ul className="mt-2 space-y-1 text-xs text-slate-600">
-                      {usageLabels.subsectionLabelPaths.map((path) => (
-                        <li key={path} className="truncate">{path}</li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="mt-2 text-xs text-slate-500">No activity nodes selected.</p>
-                  )}
+                  ) : null}
                 </div>
 
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Narrative Snapshot</p>
-                  <p className="mt-1 max-h-24 overflow-auto text-slate-700">
-                    {usageReason.trim().length > 0 ? usageReason : 'No usage reason added yet.'}
-                  </p>
+                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Activities</p>
+                  {previewActivityItems.length > 0 ? (
+                    <ul className="mt-2 space-y-1 text-xs text-slate-700">
+                      {previewActivityItems.map((item) => (
+                        <li key={item.id} className="truncate">
+                          {item.label}
+                          {item.rootLabel ? ` (${item.rootLabel})` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
 
                 <div className="rounded-lg border border-slate-200 bg-white p-3">
@@ -1297,9 +1008,7 @@ export function ManualLogForm({
             ) : (
               <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Compliance Preview</p>
-                <p className="mt-2 text-sm text-slate-700">
-                  Preview becomes available after Context is completed.
-                </p>
+                <p className="mt-2 text-sm text-slate-700">Complete context first.</p>
               </section>
             )}
 

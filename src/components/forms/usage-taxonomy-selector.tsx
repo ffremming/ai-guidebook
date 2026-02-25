@@ -224,23 +224,8 @@ export function UsageTaxonomySelector({
 
   return (
     <section className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <div>
-        <h2 className="text-sm font-semibold text-slate-900">AI usage type tree</h2>
-        <p className="mt-1 text-xs text-slate-600">
-          Select all nodes that describe your usage. You can select across multiple top-level categories.
-        </p>
-      </div>
-
       <div className="space-y-2 rounded-md border border-slate-200 bg-white p-3">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs font-medium uppercase tracking-wide text-slate-600">
-            Full usage tree
-          </p>
-          {nodeStatusById ? (
-            <p className="text-[11px] text-slate-500">
-              Rule badges from assignment: ALLOWED / DISALLOWED / MIXED
-            </p>
-          ) : null}
           <div className="flex items-center gap-2">
             <button
               type="button"

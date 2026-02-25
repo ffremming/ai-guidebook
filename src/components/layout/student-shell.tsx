@@ -4,7 +4,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
 
 import { AppShell } from '@/components/layout/app-shell';
-import { NotificationBanner } from '@/components/layout/notification-banner';
 
 export function StudentShell({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
@@ -28,7 +27,6 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
           { href: '/log', label: 'New Log' },
           { href: '/reflections', label: 'Reflections' },
         ]}
-        topSlot={<NotificationBanner />}
       >
         {children}
       </AppShell>

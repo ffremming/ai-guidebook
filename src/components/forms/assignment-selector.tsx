@@ -63,11 +63,6 @@ export function AssignmentSelector({
       <label htmlFor="assignmentId" className="block text-sm font-medium text-slate-900">
         Assignment
       </label>
-      <p className="text-xs text-slate-600">
-        {disabled
-          ? 'Choose a course first.'
-          : 'Select the assignment this AI usage belongs to.'}
-      </p>
       <input
         id="assignment-search"
         type="text"
@@ -92,9 +87,7 @@ export function AssignmentSelector({
           aria-disabled={disabled}
           aria-invalid={error ? true : undefined}
         >
-          {disabled ? (
-            <p className="px-3 py-2 text-sm text-slate-600">Select a course first.</p>
-          ) : filteredAssignments.length === 0 ? (
+          {disabled ? null : filteredAssignments.length === 0 ? (
             selectedAssignment ? null : <p className="px-3 py-2 text-sm text-slate-600">No assignments found for this course.</p>
           ) : (
             filteredAssignments.map((assignment) => {

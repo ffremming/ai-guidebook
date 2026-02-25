@@ -14,6 +14,11 @@ export type UsageSection = {
 
 export const MANUAL_USAGE_TAXONOMY: UsageSection[] = [
   {
+    id: 'no-ai',
+    label: 'No AI',
+    children: [],
+  },
+  {
     id: 'writing',
     label: 'Writing',
     children: [

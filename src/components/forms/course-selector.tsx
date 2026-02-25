@@ -97,7 +97,6 @@ export function CourseSelector({ courses, selectedCourseId, onSelect }: CourseSe
       <label htmlFor="course-selector" className="block text-sm font-medium text-slate-900">
         Course
       </label>
-      <p className="text-xs text-slate-600">Search by course code or name, then choose a match.</p>
       <input
         id="course-selector"
         type="text"
